@@ -183,7 +183,7 @@ def _gen_shape(
     stats = {
         'model': {
             'shapegen': f'{args.model_path}/{args.subfolder}',
-            'texgen': f'{args.texgen_model_path}',
+            'texgen': f'{args.texgen_model_path}/{args.texgen_subfolder}',
         },
         'params': {
             'caption': caption,
@@ -512,7 +512,7 @@ def build_app():
 
         gr.HTML(f"""
         <div align="center">
-        Activated Model - Shape Generation ({args.model_path}/{args.subfolder}) ; Texture Generation ({'Hunyuan3D-2' if HAS_TEXTUREGEN else 'Unavailable'})
+        Activated Model - Shape Generation ({args.model_path}/{args.subfolder}) ; Texture Generation ({f'{args.texgen_model_path}/{args.texgen_subfolder}' if HAS_TEXTUREGEN else 'Unavailable'})
         </div>
         """)
         if not HAS_TEXTUREGEN:
@@ -664,6 +664,10 @@ if __name__ == '__main__':
     parser.add_argument("--model_path", type=str, default='tencent/Hunyuan3D-2mini')
     parser.add_argument("--subfolder", type=str, default='hunyuan3d-dit-v2-mini-turbo')
     parser.add_argument("--texgen_model_path", type=str, default='tencent/Hunyuan3D-2')
+    parser.add_argument("--texgen_subfolder", type=str, default='hunyuan3d-paint-v2-0-turbo',
+                        choices=['hunyuan3d-paint-v2-0-turbo', 'hunyuan3d-paint-v2-0'],
+                        help='Paint checkpoint. The default is the distilled turbo model; '
+                             'hunyuan3d-paint-v2-0 is the full model - slower, higher texture quality.')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--host', type=str, default='0.0.0.0')
     parser.add_argument('--device', type=str, default='cuda')
@@ -710,7 +714,8 @@ if __name__ == '__main__':
         try:
             from hy3dgen.texgen import Hunyuan3DPaintPipeline
 
-            texgen_worker = Hunyuan3DPaintPipeline.from_pretrained(args.texgen_model_path)
+            texgen_worker = Hunyuan3DPaintPipeline.from_pretrained(
+                args.texgen_model_path, subfolder=args.texgen_subfolder)
             if args.low_vram_mode:
                 texgen_worker.enable_model_cpu_offload()
             # Not help much, ignore for now.

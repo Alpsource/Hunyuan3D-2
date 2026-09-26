@@ -148,6 +148,7 @@ class ModelWorker:
                  model_path='tencent/Hunyuan3D-2mini',
                  tex_model_path='tencent/Hunyuan3D-2',
                  subfolder='hunyuan3d-dit-v2-mini-turbo',
+                 tex_subfolder='hunyuan3d-paint-v2-0-turbo',
                  device='cuda',
                  enable_tex=False):
         self.model_path = model_path
@@ -168,7 +169,8 @@ class ModelWorker:
         #     device=device
         # )
         if enable_tex:
-            self.pipeline_tex = Hunyuan3DPaintPipeline.from_pretrained(tex_model_path)
+            self.pipeline_tex = Hunyuan3DPaintPipeline.from_pretrained(
+                tex_model_path, subfolder=tex_subfolder)
 
     def get_queue_length(self):
         if model_semaphore is None:
@@ -306,11 +308,15 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--limit-model-concurrency", type=int, default=5)
     parser.add_argument('--enable_tex', action='store_true')
+    parser.add_argument("--tex_subfolder", type=str, default='hunyuan3d-paint-v2-0-turbo',
+                        choices=['hunyuan3d-paint-v2-0-turbo', 'hunyuan3d-paint-v2-0'],
+                        help='Paint checkpoint. The default is the distilled turbo model; '
+                             'hunyuan3d-paint-v2-0 is the full model - slower, higher texture quality.')
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
     model_semaphore = asyncio.Semaphore(args.limit_model_concurrency)
 
     worker = ModelWorker(model_path=args.model_path, device=args.device, enable_tex=args.enable_tex,
-                         tex_model_path=args.tex_model_path)
+                         tex_model_path=args.tex_model_path, tex_subfolder=args.tex_subfolder)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
