@@ -82,6 +82,19 @@ def gen_save_folder(max_size=200):
     return new_folder
 
 
+def pack_sidecar_files(path, save_folder):
+    """Zip an export that spans several files (mesh + .mtl + texture) so the
+    download stays textured. Self-contained exports are returned unchanged."""
+    companions = [f for f in os.listdir(save_folder)
+                  if os.path.join(save_folder, f) != path and not f.endswith('.html')]
+    if not companions:
+        return path
+    # Build the archive outside save_folder, otherwise it would be zipped into itself.
+    archive_dir = gen_save_folder()
+    base = os.path.join(archive_dir, os.path.splitext(os.path.basename(path))[0])
+    return shutil.make_archive(base, 'zip', save_folder)
+
+
 def export_mesh(mesh, save_folder, textured=False, type='glb'):
     if textured:
         path = os.path.join(save_folder, f'textured_mesh.{type}')
@@ -606,6 +619,9 @@ def build_app():
                 mesh = trimesh.load(file_out2)
                 save_folder = gen_save_folder()
                 path = export_mesh(mesh, save_folder, textured=True, type=file_type)
+                # Formats like obj write the texture/material as sibling files, so the
+                # single file handed to the download button would arrive untextured.
+                path = pack_sidecar_files(path, save_folder)
 
                 # for preview
                 save_folder = gen_save_folder()
