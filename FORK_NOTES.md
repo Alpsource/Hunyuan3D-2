@@ -17,6 +17,7 @@ so expect more of it when you bump versions again.
 | 3 | Feature | `gradio_app.py`, `api_server.py` | `--texgen_subfolder` / `--tex_subfolder` to select the paint model |
 | 4 | Bug fix | `hy3dgen/texgen/hunyuanpaint/pipeline.py` | Full paint model crashed under model cpu offload |
 | 5 | New tool | `batch_gen.py` | Unattended folder-of-images to textured GLBs |
+| 6 | Feature | `gradio_app.py` | Target face number is settable for textured generation |
 
 ---
 
@@ -153,6 +154,32 @@ config alone would not take effect).
 Unattended behaviour: a failing asset writes its traceback to `out/logs/<name>.log` and the run continues;
 `manifest.csv` is flushed after every asset; existing outputs are skipped so an interrupted run resumes by
 re-running the same command; exit status is 1 if anything failed.
+
+## 6. Target face number for textured generation
+
+**Symptom.** *Simplify Mesh* in the Export tab is greyed out after **Gen Textured Shape**, so every textured mesh
+the UI produces is stuck at 40000 faces with no way to ask for fewer.
+
+**Why upstream disables it.** This one is correct behaviour, not a bug. `reduce_face()` applies pymeshlab's
+`meshing_decimation_quadric_edge_collapse`, not the `_with_texture` variant, so it does not carry UV coordinates
+through. Decimating an already-baked mesh rebuilds the geometry and invalidates the UV layout the texture was baked
+against — you would get a lower-poly mesh with a scrambled texture. `on_export_click` therefore ignores
+`reduce_face`/`target_face_num` entirely in its `export_texture` branch, and the callback at the end of
+`btn_all.click` sets the checkbox to `interactive=False`.
+
+**Change.** Decimation has to happen *before* texturing, which `generation_all` already does — it just called
+`face_reduce_worker(mesh)` with `FaceReducer`'s hardcoded 40000 default. A **Target Face Number** slider in
+Advanced Options now feeds that call, so the setting lands at the only point in the pipeline where it is safe.
+Default stays 40000, so shipped behaviour is unchanged. The value is recorded in `stats['params']` and travels in
+the exported mesh metadata.
+
+The slider carries an `info` string explaining why the Export tab cannot do this, so the greyed-out checkbox stops
+looking like a fault.
+
+Verified through the Gradio API: requesting 3000 and 40000 produced meshes of exactly 3000 and 40000 faces, both
+with intact 2048x2048 textures.
+
+**Worth upstreaming?** Yes, and it pairs naturally with a tooltip on the disabled Simplify Mesh checkbox.
 
 ---
 

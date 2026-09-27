@@ -61,6 +61,10 @@ def get_example_mv_list():
     return mv_list
 
 
+# FaceReducer's own default, kept so the shipped behaviour is unchanged.
+DEFAULT_FACE_NUM = 40000
+
+
 def gen_save_folder(max_size=200):
     os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -266,6 +270,7 @@ def generation_all(
     check_box_rembg=False,
     num_chunks=200000,
     randomize_seed: bool = False,
+    target_face_num=DEFAULT_FACE_NUM,
 ):
     start_time_0 = time.time()
     mesh, image, save_folder, stats, seed = _gen_shape(
@@ -292,9 +297,12 @@ def generation_all(
     # stats['time']['postprocessing'] = time.time() - tmp_time
 
     tmp_time = time.time()
-    mesh = face_reduce_worker(mesh)
+    # Decimate before texturing: the bake is tied to the UV layout, so reducing
+    # afterwards would invalidate it.
+    mesh = face_reduce_worker(mesh, max_facenum=int(target_face_num))
     logger.info("---Face Reduction takes %s seconds ---" % (time.time() - tmp_time))
     stats['time']['face reduction'] = time.time() - tmp_time
+    stats['params']['target_face_num'] = int(target_face_num)
 
     tmp_time = time.time()
     textured_mesh = texgen_worker(mesh, image)
@@ -470,6 +478,12 @@ def build_app():
                             cfg_scale = gr.Number(value=5.0, label='Guidance Scale', min_width=100)
                             num_chunks = gr.Slider(maximum=5000000, minimum=1000, value=8000,
                                                    label='Number of Chunks', min_width=100)
+                        gen_target_face_num = gr.Slider(
+                            maximum=1000000, minimum=100, step=100, value=DEFAULT_FACE_NUM,
+                            label='Target Face Number',
+                            info='Applied before texturing, so it is the face count of the textured mesh. '
+                                 'The Export tab cannot simplify a textured mesh: decimation does not carry '
+                                 'UVs, which would break the baked texture.')
                     with gr.Tab("Export", id='tab_export'):
                         with gr.Row():
                             file_type = gr.Dropdown(label='File Type', choices=SUPPORTED_FORMATS,
@@ -578,6 +592,7 @@ def build_app():
                 check_box_rembg,
                 num_chunks,
                 randomize_seed,
+                gen_target_face_num,
             ],
             outputs=[file_out, file_out2, html_gen_mesh, stats, seed]
         ).then(
