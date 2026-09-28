@@ -18,6 +18,7 @@ so expect more of it when you bump versions again.
 | 4 | Bug fix | `hy3dgen/texgen/hunyuanpaint/pipeline.py` | Full paint model crashed under model cpu offload |
 | 5 | New tool | `batch_gen.py` | Unattended folder-of-images to textured GLBs |
 | 6 | Feature | `gradio_app.py` | Target face number is settable for textured generation |
+| 7 | New tool | `view_assets.py` | Browser gallery for reviewing generated meshes |
 
 ---
 
@@ -180,6 +181,31 @@ Verified through the Gradio API: requesting 3000 and 40000 produced meshes of ex
 with intact 2048x2048 textures.
 
 **Worth upstreaming?** Yes, and it pairs naturally with a tooltip on the disabled Simplify Mesh checkbox.
+
+## 7. `view_assets.py` - reviewing a batch
+
+New file, no upstream equivalent. Serves a folder of generated meshes as a grid of orbitable previews:
+
+```bash
+python3 view_assets.py out/
+```
+
+It reuses the `@google/model-viewer` component the Gradio app already embeds, so there is nothing to install.
+Face counts and timings come from `batch_gen.py`'s `manifest.csv` when one is present. Nothing is written to the
+asset folder - the index page is generated in memory by a request handler that intercepts `/`.
+
+Picks the first free port from 8000 upwards, since 8000 is a common default to have taken already; an explicitly
+requested busy port produces a one-line message rather than a socket traceback. The startup line is flushed
+explicitly, otherwise the chosen port is invisible whenever stdout is redirected.
+
+glTF/GLB only - the web component does not read OBJ.
+
+**Viewing OBJ, or anything outside the browser:** `f3d` (in apt) handles both. Its default lighting is dim; the
+repo's `assets/env_maps/white.jpg` works well as an HDRI, while `gradient.jpg` renders almost black:
+
+```bash
+f3d model.glb -tuq --hdri=assets/env_maps/white.jpg
+```
 
 ---
 
