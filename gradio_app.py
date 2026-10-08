@@ -21,6 +21,7 @@ from pathlib import Path
 
 import gradio as gr
 import torch
+from PIL import Image
 import trimesh
 import uvicorn
 from fastapi import FastAPI
@@ -325,6 +326,90 @@ def generation_all(
     )
 
 
+def generation_batch(
+    batch_files=None,
+    with_texture=True,
+    steps=50,
+    guidance_scale=7.5,
+    seed=1234,
+    octree_resolution=256,
+    check_box_rembg=False,
+    num_chunks=200000,
+    randomize_seed: bool = False,
+    target_face_num=DEFAULT_FACE_NUM,
+    progress=gr.Progress(),
+):
+    """Run a folder of images through the pipeline, one asset at a time.
+
+    A failing image is logged and skipped rather than aborting the whole run.
+    """
+    if not batch_files:
+        raise gr.Error('Please upload at least one image.')
+    if with_texture and not HAS_TEXTUREGEN:
+        raise gr.Error('Texture generation is unavailable. Untick "Generate texture" to run shape only.')
+
+    save_folder = gen_save_folder()
+    lines, used_names = [], set()
+    succeeded = failed = 0
+    run_start = time.time()
+
+    for index, file_path in enumerate(batch_files):
+        stem = Path(file_path).stem
+        name, suffix = stem, 1
+        while name in used_names:  # two uploads can share a stem
+            name, suffix = f'{stem}_{suffix}', suffix + 1
+        used_names.add(name)
+
+        progress((index, len(batch_files)), desc=f'{name} ({index + 1}/{len(batch_files)})')
+        item_start = time.time()
+        try:
+            image = Image.open(file_path)
+            if check_box_rembg or image.mode == 'RGB':
+                image = rmbg_worker(image.convert('RGB'))
+
+            item_seed = int(randomize_seed_fn(seed, randomize_seed))
+            generator = torch.Generator().manual_seed(item_seed)
+            outputs = i23d_worker(
+                image=image,
+                num_inference_steps=steps,
+                guidance_scale=guidance_scale,
+                generator=generator,
+                octree_resolution=octree_resolution,
+                num_chunks=num_chunks,
+                output_type='mesh',
+            )
+            mesh = export_to_trimesh(outputs)[0]
+            # Decimate before texturing, as generation_all does: the bake is tied to the UV
+            # layout, so reducing afterwards would invalidate it.
+            mesh = face_reduce_worker(mesh, max_facenum=int(target_face_num))
+            if with_texture:
+                mesh = texgen_worker(mesh, image)
+
+            mesh.export(os.path.join(save_folder, f'{name}.glb'), include_normals=with_texture)
+            succeeded += 1
+            lines.append(f'- **{name}** - {len(mesh.faces):,} faces, {time.time() - item_start:.0f}s')
+        except Exception as error:
+            failed += 1
+            logger.exception(f'Batch item {name} failed')
+            lines.append(f'- **{name}** - failed: {error}')
+        if args.low_vram_mode:
+            torch.cuda.empty_cache()
+
+    archive = None
+    if succeeded:
+        # Build the zip outside save_folder, or it would be packed into itself.
+        archive = shutil.make_archive(
+            os.path.join(gen_save_folder(), 'batch_meshes'), 'zip', save_folder)
+
+    summary = (f'### {succeeded} generated, {failed} failed '
+               f'in {(time.time() - run_start) / 60:.1f} min\n\n' + '\n'.join(lines))
+    return (
+        summary,
+        gr.update(value=archive, interactive=archive is not None),
+        gr.update(selected='batch_panel'),
+    )
+
+
 def shape_generation(
     caption=None,
     image=None,
@@ -436,6 +521,17 @@ def build_app():
                             mv_image_right = gr.Image(label='Right', type='pil', image_mode='RGBA', height=140,
                                                       min_width=100, elem_classes='mv-image')
 
+                    with gr.Tab('Batch', id='tab_batch', visible=not MV_MODE) as tab_batch:
+                        batch_files = gr.File(label='Images', file_count='multiple',
+                                              type='filepath', file_types=['image'], height=185)
+                        with gr.Row():
+                            batch_with_texture = gr.Checkbox(label='Generate texture',
+                                                             value=HAS_TEXTUREGEN,
+                                                             interactive=HAS_TEXTUREGEN, min_width=100)
+                            btn_batch = gr.Button(value='Run Batch', variant='primary', min_width=100)
+                        gr.Markdown('Uses the Advanced Options settings below. Results arrive as a zip '
+                                    'of GLB files; a failing image is skipped, not fatal.')
+
                 with gr.Row():
                     btn = gr.Button(value='Gen Shape', variant='primary', min_width=100)
                     btn_all = gr.Button(value='Gen Textured Shape',
@@ -506,6 +602,10 @@ def build_app():
                         html_export_mesh = gr.HTML(HTML_OUTPUT_PLACEHOLDER, label='Output')
                     with gr.Tab('Mesh Statistic', id='stats_panel'):
                         stats = gr.Json({}, label='Mesh Stats')
+                    with gr.Tab('Batch Results', id='batch_panel'):
+                        batch_log = gr.Markdown('Upload images in the Batch tab and press Run Batch.')
+                        batch_download = gr.DownloadButton(label='Download All (zip)',
+                                                           variant='primary', interactive=False)
 
             with gr.Column(scale=3 if MV_MODE else 2):
                 with gr.Tabs(selected='tab_img_gallery') as gallery:
@@ -602,6 +702,23 @@ def build_app():
         ).then(
             lambda: gr.update(selected='gen_mesh_panel'),
             outputs=[tabs_output],
+        )
+
+        btn_batch.click(
+            generation_batch,
+            inputs=[
+                batch_files,
+                batch_with_texture,
+                num_steps,
+                cfg_scale,
+                seed,
+                octree_resolution,
+                check_box_rembg,
+                num_chunks,
+                randomize_seed,
+                gen_target_face_num,
+            ],
+            outputs=[batch_log, batch_download, tabs_output],
         )
 
         def on_gen_mode_change(value):

@@ -19,6 +19,7 @@ so expect more of it when you bump versions again.
 | 5 | New tool | `batch_gen.py` | Unattended folder-of-images to textured GLBs |
 | 6 | Feature | `gradio_app.py` | Target face number is settable for textured generation |
 | 7 | New tool | `view_assets.py` | Browser gallery for reviewing generated meshes |
+| 8 | Feature | `gradio_app.py` | Batch tab: many images in one run, from the UI |
 
 ---
 
@@ -206,6 +207,24 @@ repo's `assets/env_maps/white.jpg` works well as an HDRI, while `gradient.jpg` r
 ```bash
 f3d model.glb -tuq --hdri=assets/env_maps/white.jpg
 ```
+
+## 8. Batch tab in the Gradio UI
+
+Upstream's UI generates one asset per press. `batch_gen.py` covers unattended runs, but it is command line only,
+so there was no way to queue a folder from the browser.
+
+A **Batch** tab next to the prompt tabs takes a multi-file image upload and a *Generate texture* checkbox, and
+reuses the Advanced Options settings already on screen rather than duplicating sliders. Results appear in a
+**Batch Results** output tab: a per-asset log and a zip of the GLBs.
+
+It runs in the app's own process, so the models already loaded serve the batch - no second copy in VRAM.
+Per-asset error isolation matches `batch_gen.py`: a failing image is logged and skipped, and the rest of the run
+continues. Decimation happens before texturing, as in `generation_all`. Upload stems that collide get a numeric
+suffix instead of overwriting each other. The zip is built outside its source folder, otherwise
+`shutil.make_archive` packs the growing archive into itself.
+
+`batch_gen.py` remains the better tool for long unattended runs - it has resume, a CSV manifest and per-asset
+traceback logs, none of which fit a browser session that can be closed mid-run.
 
 ---
 
