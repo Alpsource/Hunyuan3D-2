@@ -20,6 +20,7 @@ so expect more of it when you bump versions again.
 | 6 | Feature | `gradio_app.py` | Target face number is settable for textured generation |
 | 7 | New tool | `view_assets.py` | Browser gallery for reviewing generated meshes |
 | 8 | Feature | `gradio_app.py` | Batch tab: many images in one run, from the UI |
+| 9 | Performance | `hy3dgen/shapegen/pipelines.py` | Checkpoint load 25.8s -> 3.7s |
 
 ---
 
@@ -225,6 +226,43 @@ suffix instead of overwriting each other. The zip is built outside its source fo
 
 `batch_gen.py` remains the better tool for long unattended runs - it has resume, a CSV manifest and per-asset
 traceback logs, none of which fit a browser session that can be closed mid-run.
+
+## 9. Checkpoint loading spent 22s initialising weights it then discarded
+
+**Symptom.** Loading the shape pipeline took ~26s even with everything cached locally, which
+is most of the wait before the first generation on a cold worker.
+
+**Cause.** Measured per phase, almost none of it was I/O:
+
+| phase | time |
+|---|---|
+| hub cache check | 0.5s |
+| read safetensors from disk | 0.0s |
+| **instantiate model (random init)** | **5.5s** |
+| load_state_dict(model) | 0.1s |
+| instantiate vae | 1.6s |
+| **instantiate conditioner (DINOv2, random init)** | **16.6s** |
+| move to GPU | 1.7s |
+
+`from_single_file` calls `instantiate_from_config` for each component, which constructs the
+modules normally, so PyTorch initialises every parameter. The checkpoint's config builds the
+conditioner from a config dict - a 1536-wide, 40-layer DINOv2 of roughly 1.1B parameters - and
+kaiming-initialises all of it. `load_state_dict` then overwrites all 727 tensors.
+
+**Fix.** `build_from_checkpoint()` constructs each component under `torch.device('meta')`,
+which allocates no storage and runs no init, then loads with `assign=True` so the checkpoint
+tensors are adopted directly.
+
+The VAE needs the fallback: its encoder weights are absent from the checkpoint (upstream has a
+commit "fix vae loading without encoder weight"), so 145 tensors would be left on the meta
+device and fail at the first forward. When any tensor is still on meta after loading, the
+helper rebuilds that component the ordinary way, so correctness never depends on the
+checkpoint being complete.
+
+**Result:** 25.8s -> 3.7s. Verified bit-identical: same seed and settings produce the same face
+count, vertex count, vertex checksum and bounding box as the unpatched loader.
+
+**Worth upstreaming?** Yes - it is contained, falls back safely, and the saving is large.
 
 ---
 
