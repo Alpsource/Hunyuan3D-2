@@ -21,6 +21,7 @@ so expect more of it when you bump versions again.
 | 7 | New tool | `view_assets.py` | Browser gallery for reviewing generated meshes |
 | 8 | Feature | `gradio_app.py` | Batch tab: many images in one run, from the UI |
 | 9 | Performance | `hy3dgen/shapegen/pipelines.py` | Checkpoint load 25.8s -> 3.7s |
+| 10 | Bug fix | `requirements.txt` | `--enable_t23d` died in the tokenizer without `sentencepiece` |
 
 ---
 
@@ -263,6 +264,61 @@ checkpoint being complete.
 count, vertex count, vertex checksum and bounding box as the unpatched loader.
 
 **Worth upstreaming?** Yes - it is contained, falls back safely, and the saving is large.
+
+---
+
+## 10. Text-to-image dies in the tokenizer without `sentencepiece`
+
+**Symptom.** Anything on the `--enable_t23d` path - `hy3dgen/text2image.py`, so the Gradio text
+tab and any text-to-3D client - fails while loading the model, before a single step runs:
+
+```
+ValueError: `tiktoken` is required to read a `tiktoken` file. Install it with `pip install tiktoken`.
+```
+
+and, if you take that advice and install tiktoken, it gets stranger:
+
+```
+ValueError: Error parsing line b'\x0e' in .../tokenizer_2/spiece.model
+```
+
+**Cause.** Neither message is about tiktoken. HunyuanDiT's `tokenizer_2` is mT5's: a
+`T5Tokenizer` shipped as a bare `spiece.model`, with no `tokenizer.json`. transformers must
+convert it at load time, and `tokenization_utils_tokenizers.py:convert_to_native_format`
+dispatches on the file extension alone - every `.model` file is tried as SentencePiece first,
+then **falls back to the tiktoken extractor** if that raises:
+
+```python
+try:
+    local_kwargs = cls._convert_from_sentencepiece(vocab_file, local_kwargs)
+    return local_kwargs
+except Exception as e:   # TODO only catch deserialization error here!
+    logger.warning(f"Could not extract SentencePiece model from {vocab_file} ... "
+                   "Falling back to TikToken extractor.")
+local_kwargs = cls._convert_from_tiktoken(vocab_file, local_kwargs)
+```
+
+The bare `except Exception` swallows the real failure - `sentencepiece` is not installed - and
+demotes it to a warning. What surfaces is the fallback choking on a protobuf file it was never
+given a reason to expect. The upstream TODO on that line says they know the catch is too wide.
+
+`requirements.txt` has the dependency, commented out:
+
+```
+#sentencepiece
+```
+
+**Fix.** Uncomment it. That is the whole change; `tiktoken` is not needed at all, and
+uninstalling it again after the fix confirms the tokenizer still loads.
+
+This is not a version-gap problem like the others here - the slow `T5Tokenizer` has always
+needed sentencepiece. It only looks like one because the diagnostic is so misleading.
+
+**Result:** text to 3D loads and runs. Measured end to end through hy3dforge, 8000 faces:
+text-to-image 43.1s, shape 29.8s, texture 14.3s, **total 97.4s**.
+
+**Worth upstreaming?** Yes - a one-character diff against an error message that sends you in
+exactly the wrong direction.
 
 ---
 
